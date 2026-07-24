@@ -1,0 +1,57 @@
+# Prometheus alert rules for LLM quota monitor
+# Drop this into /etc/prometheus/rules/llm_monitor.yml (or wherever your
+# prometheus.yml says rule_files points to) and reload Prometheus.
+
+groups:
+  - name: llm_quota
+    interval: 30s
+    rules:
+      # ── Quota threshold warnings ────────────────────────────────────
+      - alert: LLMQuotaHigh
+        expr: llm_quota_percent >= 80
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.provider }} · {{ $labels.window }} 已用 {{ $value | printf \"%.1f\" }}%"
+          description: "LLM 配额使用率高于 80% 持续 2 分钟。请检查用量或升级套餐。"
+          dashboard: "https://your-grafana/d/llm-quota-monitor"
+
+      - alert: LLMQuotaCritical
+        expr: llm_quota_percent >= 95
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "🔥 {{ $labels.provider }} · {{ $labels.window }} 已用 {{ $value | printf \"%.1f\" }}% (critical)"
+          description: "即将耗尽。建议立即停止该 provider 的调用或升级。"
+          dashboard: "https://your-grafana/d/llm-quota-monitor"
+
+      # ── Scraper health ─────────────────────────────────────────────
+      - alert: LLMScraperDown
+        expr: llm_scraper_status == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "🚨 {{ $labels.provider }} 抓取失败超过 10 分钟"
+          description: "可能 cookie 过期或 dashboard 改版。请查看 Telegram 告警并刷新对应 cookie。"
+
+      - alert: LLMScrapeStale
+        expr: time() - llm_scrape_age_seconds > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "⚠️ {{ $labels.provider }} 数据已 15 分钟未更新"
+          description: "scraper 可能在轮询但没拿到有效响应。"
+
+      # ── 5h window is about to reset (informational) ────────────────
+      - alert: LLMQuintHourResetImminent
+        expr: llm_quota_reset_seconds{window="5h"} > 0 and llm_quota_reset_seconds{window="5h"} < 300
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.provider }} 5h 配额 {{ $value | printf \"%.0f\" }}秒后重置"
+          description: "如果你正在受限，可等待 {{ $value | printf \"%.0f\" }}秒。"

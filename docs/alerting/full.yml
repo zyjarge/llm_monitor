@@ -1,0 +1,354 @@
+# LLM Monitor — Grafana Unified Alerting
+# Three provisioning files for grafana to auto-load:
+#   1. contact-points.yaml — Telegram contact point
+#   2. policies.yaml      — Root notification policy (route to telegram)
+#   3. rules.yaml         — 6 alert rules
+#
+# Place all three in /etc/grafana/provisioning/alerting/ on .17 and run:
+#   curl -X POST http://admin:admin@localhost:3000/api/admin/provisioning/alerting/reload
+#
+# Telegram contact point uses the user's bot token + chat_id from .env.
+# (These values were read once into memory and written here; do not commit
+# the bot token to git.)
+
+# ─── contact-points.yaml ───
+# Uses Grafana's "unified alerting" contact point format.
+# The webhook URL format for Telegram is:
+#   https://api.telegram.org/bot<TOKEN>/sendMessage
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: telegram-llm
+    receivers:
+      - uid: telegram-llm-receiver
+        type: telegram
+        settings:
+          # Bot token + chat_id (read from .env, NOT in this comment to avoid git leakage)
+          token: __TELEGRAM_BOT_TOKEN__
+          chatid: __TELEGRAM_CHAT_ID__
+          # Optional: parse_mode for nicer formatting (HTML or Markdown)
+          parse_mode: HTML
+          # Disable webhook URL — telegram uses polling via bot API
+          # (grafana calls api.telegram.org directly with the token)
+        # Contact point integration (grafana's telegram integration)
+    # 'grafana' integration type uses the official grafana-telegram integration
+    # which expects you to configure the bot in grafana.ini. The 'telegram'
+    # type above uses the standard 'telegram' integration.
+    # If issues, fall back to a webhook contact point to a custom URL.
+
+# ─── policies.yaml ───
+# Root policy that routes all alerts to the telegram contact point.
+policies:
+  - orgId: 1
+    receiver: telegram-llm
+    group_by:
+      - grafana_folder
+      - alertname
+      - severity
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 1h
+    # No routes — all alerts go to the root receiver
+
+# ─── rules.yaml ───
+# 6 alert rules. Grafana unified alerting format.
+# Each rule has:
+#   - title (shown in UI)
+#   - condition (the data refId to evaluate)
+#   - data (the query)
+#   - for / noDataState / execErrState
+#   - labels (severity etc)
+#   - annotations (shown in notification)
+# We use a single data refId 'A' (the query) and a single condition 'C'
+# which is the threshold check.
+groups:
+  - orgId: 1
+    name: llm-monitor
+    folder: LLM Monitor
+    interval: 1m
+    rules:
+      # ─── 1. ScraperDown: no llm_quota_percent data for 10+ minutes ───
+      - uid: scraper-down
+        title: "scraper_down: llm-monitor not reporting"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: aejrdo9v8hz40c
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              refId: A
+              datasource:
+                type: prometheus
+                uid: aejrdo9v8hz40c
+              expr: absent_over_time(llm_quota_percent[10m])
+              intervalMs: 60000
+              maxDataPoints: 1
+        noDataState: NoData
+        execErrState: Alerting
+        for: 1m
+        annotations:
+          summary: "llm-monitor scraper not reporting for 10+ min"
+          description: "No data in llm_quota_percent. Check 'docker logs llm-monitor-scraper' on .20; verify pushgateway at :9091 is reachable."
+        labels:
+          severity: critical
+          component: scraper
+        isPaused: false
+      - refId: C
+        datasourceUid: __expr__
+        model:
+          refId: C
+          type: threshold
+          expression: A
+          conditions:
+            - evaluator:
+                type: no_value
+                params: []
+              operator:
+                type: and
+              query:
+                params: []
+              reducer:
+                type: last
+                params: []
+              type: query
+        # No thresholds for absent_over_time - alert fires when A is true (no data)
+
+      # ─── 2. Minimaxi5hCritical: minimaxi 5h usage >= 90% for 10m ───
+      - uid: minimaxi-5h-critical
+        title: "minimaxi 5h usage >= 90%"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: aejrdo9v8hz40c
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              refId: A
+              datasource:
+                type: prometheus
+                uid: aejrdo9v8hz40c
+              expr: llm_quota_percent{provider="minimaxi",window="5h"}
+              intervalMs: 60000
+              maxDataPoints: 1
+        noDataState: OK
+        execErrState: Alerting
+        for: 10m
+        annotations:
+          summary: "minimaxi 5h usage {{ $value | printf \"%.0f\" }}%"
+          description: "minimaxi 5h rolling window has been at or above 90% for 10+ minutes. Will hit cap soon."
+        labels:
+          severity: critical
+          provider: minimaxi
+          window: 5h
+        isPaused: false
+      - refId: C
+        datasourceUid: __expr__
+        model:
+          refId: C
+          type: threshold
+          expression: A
+          conditions:
+            - evaluator:
+                type: gt
+                params: [90]
+              operator:
+                type: and
+              query:
+                params: [A]
+              reducer:
+                type: last
+                params: []
+              type: query
+
+      # ─── 3. OpencodeMonthlyWarning: opencode monthly >= 80% for 15m ───
+      - uid: opencode-monthly-warning
+        title: "opencode monthly usage >= 80%"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: aejrdo9v8hz40c
+            relativeTimeRange:
+              from: 900
+              to: 0
+            model:
+              refId: A
+              datasource:
+                type: prometheus
+                uid: aejrdo9v8hz40c
+              expr: llm_quota_percent{provider="opencode_go",window="monthly"}
+              intervalMs: 60000
+              maxDataPoints: 1
+        noDataState: OK
+        execErrState: Alerting
+        for: 15m
+        annotations:
+          summary: "opencode_go monthly usage {{ $value | printf \"%.0f\" }}%"
+          description: "opencode_go monthly usage >= 80% for 15+ min. Plan around the monthly cap."
+        labels:
+          severity: warning
+          provider: opencode_go
+          window: monthly
+        isPaused: false
+      - refId: C
+        datasourceUid: __expr__
+        model:
+          refId: C
+          type: threshold
+          expression: A
+          conditions:
+            - evaluator:
+                type: gt
+                params: [80]
+              operator:
+                type: and
+              query:
+                params: [A]
+              reducer:
+                type: last
+                params: []
+              type: query
+
+      # ─── 4. KimiWeeklyWarning: kimi weekly >= 80% for 15m ───
+      - uid: kimi-weekly-warning
+        title: "kimi weekly usage >= 80%"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: aejrdo9v8hz40c
+            relativeTimeRange:
+              from: 900
+              to: 0
+            model:
+              refId: A
+              datasource:
+                type: prometheus
+                uid: aejrdo9v8hz40c
+              expr: llm_quota_percent{provider="kimi_code",window="weekly"}
+              intervalMs: 60000
+              maxDataPoints: 1
+        noDataState: OK
+        execErrState: Alerting
+        for: 15m
+        annotations:
+          summary: "kimi_code weekly usage {{ $value | printf \"%.0f\" }}%"
+          description: "kimi_code weekly usage >= 80% for 15+ min."
+        labels:
+          severity: warning
+          provider: kimi_code
+          window: weekly
+        isPaused: false
+      - refId: C
+        datasourceUid: __expr__
+        model:
+          refId: C
+          type: threshold
+          expression: A
+          conditions:
+            - evaluator:
+                type: gt
+                params: [80]
+              operator:
+                type: and
+              query:
+                params: [A]
+              reducer:
+                type: last
+                params: []
+              type: query
+
+      # ─── 5. AnyProvider5hWarning: any provider 5h >= 80% for 10m ───
+      - uid: any-5h-80
+        title: "any provider 5h usage >= 80%"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: aejrdo9v8hz40c
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              refId: A
+              datasource:
+                type: prometheus
+                uid: aejrdo9v8hz40c
+              expr: llm_quota_percent{window="5h"}
+              intervalMs: 60000
+              maxDataPoints: 1
+        noDataState: OK
+        execErrState: Alerting
+        for: 10m
+        annotations:
+          summary: "{{ $labels.provider }} 5h usage {{ $value | printf \"%.0f\" }}%"
+          description: "5h window for {{ $labels.provider }} at or above 80% for 10+ min."
+        labels:
+          severity: warning
+          window: 5h
+        isPaused: false
+      - refId: C
+        datasourceUid: __expr__
+        model:
+          refId: C
+          type: threshold
+          expression: A
+          conditions:
+            - evaluator:
+                type: gt
+                params: [80]
+              operator:
+                type: and
+              query:
+                params: [A]
+              reducer:
+                type: last
+                params: []
+              type: query
+
+      # ─── 6. ResetImminent: 5h resets in < 1h AND usage > 70% ───
+      - uid: reset-imminent
+        title: "5h window resets in < 1h, usage > 70%"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: aejrdo9v8hz40c
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              refId: A
+              datasource:
+                type: prometheus
+                uid: aejrdo9v8hz40c
+              expr: llm_quota_reset_seconds{window="5h"} < 3600 and on() llm_quota_percent{window="5h"} > 70
+              intervalMs: 60000
+              maxDataPoints: 1
+        noDataState: OK
+        execErrState: Alerting
+        for: 5m
+        annotations:
+          summary: "{{ $labels.provider }} 5h resets in < 1h, usage > 70%"
+          description: "5h window for {{ $labels.provider }} will reset in less than 1 hour, but current usage is above 70%. Consider deferring non-urgent work."
+        labels:
+          severity: warning
+        isPaused: false
+      - refId: C
+        datasourceUid: __expr__
+        model:
+          refId: C
+          type: threshold
+          expression: A
+          conditions:
+            - evaluator:
+                type: gt
+                params: [0]
+              operator:
+                type: and
+              query:
+                params: [A]
+              reducer:
+                type: last
+                params: []
+              type: query

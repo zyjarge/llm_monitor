@@ -1,0 +1,104 @@
+# LLM Monitor — Alert Rules
+# These rules are evaluated by grafana 11.6.5's internal alert engine
+# (or can be loaded into prometheus via `rule_files` if you prefer).
+#
+# 6 rules:
+#   - 1 health check (scraper_down)
+#   - 4 threshold alerts (per provider × window)
+#   - 1 contextual (reset imminent + high usage)
+
+groups:
+  - name: llm-monitor
+    interval: 1m
+    rules:
+      # ─── 1. Scraper health: no data for any window of any provider ───
+      - alert: ScraperDown
+        expr: absent_over_time(llm_quota_percent[10m])
+        for: 1m
+        labels:
+          severity: critical
+          component: scraper
+        annotations:
+          summary: "llm-monitor scraper has not reported for 10+ minutes"
+          description: "No data in llm_quota_percent for any provider/window. The scraper is dead or pushgateway is unreachable."
+          runbook: "Check 'docker logs llm-monitor-scraper' on .20; verify pushgateway at :9091 is reachable."
+
+      # ─── 2. minimaxi 5h window >= 90% (critical) ───
+      - alert: Minimaxi5hCritical
+        expr: llm_quota_percent{provider="minimaxi",window="5h"} >= 90
+        for: 10m
+        labels:
+          severity: critical
+          provider: minimaxi
+          window: 5h
+        annotations:
+          summary: "minimaxi 5h usage at {{ $value | printf \"%.0f\" }}%"
+          description: "minimaxi 5h rolling window has been at or above 90% for 10+ minutes. The 5h cap is imminent and there's no recovery until the window rolls over."
+
+      # ─── 3. opencode monthly >= 80% (warning) ───
+      - alert: OpencodeMonthlyWarning
+        expr: llm_quota_percent{provider="opencode_go",window="monthly"} >= 80
+        for: 15m
+        labels:
+          severity: warning
+          provider: opencode_go
+          window: monthly
+        annotations:
+          summary: "opencode_go monthly usage at {{ $value | printf \"%.0f\" }}%"
+          description: "opencode_go monthly usage has been at or above 80% for 15+ minutes. Plan around the monthly cap."
+
+      # ─── 4. kimi weekly >= 80% (warning) ───
+      - alert: KimiWeeklyWarning
+        expr: llm_quota_percent{provider="kimi_code",window="weekly"} >= 80
+        for: 15m
+        labels:
+          severity: warning
+          provider: kimi_code
+          window: weekly
+        annotations:
+          summary: "kimi_code weekly usage at {{ $value | printf \"%.0f\" }}%"
+          description: "kimi_code weekly usage has been at or above 80% for 15+ minutes."
+
+      # ─── 5. Any provider 5h >= 80% (warning, all-providers catch-all) ───
+      - alert: AnyProvider5hWarning
+        expr: llm_quota_percent{window="5h"} >= 80
+        for: 10m
+        labels:
+          severity: warning
+          window: 5h
+        annotations:
+          summary: "{{ $labels.provider }} 5h usage at {{ $value | printf \"%.0f\" }}%"
+          description: "5h rolling window for {{ $labels.provider }} has been at or above 80% for 10+ minutes."
+
+      # ─── 6. 5h window reset imminent + high usage ───
+      - alert: ResetImminent
+        expr: llm_quota_reset_seconds{window="5h"} < 3600 and on() llm_quota_percent{window="5h"} > 70
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.provider }} 5h resets in <1h, currently at {{ $value }} sec"
+          description: "5h window for {{ $labels.provider }} resets in less than 1 hour, but usage is above 70%. If you're considering a non-urgent task that could wait until reset, do so."
+
+# ─── How to load these rules ─────────────────────────────────────
+#
+# OPTION A: Grafana internal alert engine (recommended, easier)
+#   Use grafana's "Alerting" UI or provisioning:
+#   /etc/grafana/provisioning/alerting/rules.yaml
+#   However, the syntax is different (grafana-managed-alerting, not
+#   prometheus rules). See Grafana docs: "Grafana Alerting Provisioning".
+#
+#   A simpler approach: use the grafana API to upload a contact point
+#   and rule group via /api/v1/provisioning/alert-rules
+#
+# OPTION B: Prometheus rules (requires Alertmanager)
+#   1. Save this file as: /opt/prometheus/rules/llm-monitor.yml
+#   2. In prometheus.yml, add:
+#        rule_files:
+#          - "/rules/llm-monitor.yml"
+#   3. Restart prometheus (no reload endpoint)
+#   4. Add a separate alertmanager container to receive alerts
+#   5. Configure notification channels (Telegram, email, webhook)
+#
+# For now, the rules are defined here as a reference. Choose your
+# alerting backend (grafana or prometheus+alertmanager) before loading.

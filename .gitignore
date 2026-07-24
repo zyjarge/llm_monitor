@@ -1,0 +1,17 @@
+# secrets
+.env
+cookie/
+
+data/
+logs/
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# scraper state
+*.heartbeat
+*.sqlite
+*.sqlite-journal

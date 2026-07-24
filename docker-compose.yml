@@ -1,0 +1,33 @@
+services:
+  scraper:
+    build: .
+    container_name: llm-monitor-scraper
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data           # SQLite history
+      - ./logs:/app/logs           # app logs
+      - ./cookie:/app/cookie:ro    # cookie files (read-only)
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/scraper.heartbeat"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+
+  pushgateway:
+    image: prom/pushgateway:v1.10.0
+    container_name: llm-monitor-pushgateway
+    restart: unless-stopped
+    ports:
+      - "9091:9091"               # exposed for Prometheus to scrape
+    command:
+      - '--persistence.file=/data/pushgateway.data'
+      - '--persistence.interval=5m'
+    volumes:
+      - pushgateway_data:/data
+
+  # NOTE: prometheus + grafana now run on a separate host (192.168.3.17).
+  # See README for deployment instructions.
+
+volumes:
+  pushgateway_data:
