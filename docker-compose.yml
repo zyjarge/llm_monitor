@@ -4,6 +4,12 @@ services:
     container_name: llm-monitor-scraper
     env_file: .env
     restart: unless-stopped
+    # Cap PID count so a runaway chromium leak (or any other process
+    # explosion) causes a clean container restart instead of silent
+    # PID exhaustion that hangs the scraper. Default docker limit is
+    # 4096 on most kernels; we set 2048 to fail fast and trigger the
+    # `restart: unless-stopped` recovery path.
+    pids_limit: 2048
     volumes:
       - ./data:/app/data           # SQLite history
       - ./logs:/app/logs           # app logs
@@ -18,6 +24,7 @@ services:
     image: prom/pushgateway:v1.10.0
     container_name: llm-monitor-pushgateway
     restart: unless-stopped
+    pids_limit: 256
     ports:
       - "9091:9091"               # exposed for Prometheus to scrape
     command:

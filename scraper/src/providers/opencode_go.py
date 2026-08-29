@@ -89,38 +89,45 @@ async def fetch() -> ProviderResult:
     url = f"https://opencode.ai/workspace/{settings.OPENCODE_GO_WORKSPACE_ID}/go"
 
     try:
-        async with browser_session() as browser:
-            ctx = await browser.new_context()
+        async with browser_session() as ctx:
             await ctx.add_cookies(
                 cookies_for_playwright(cookies, host="opencode.ai")
             )
             page = await ctx.new_page()
-            await page.goto(url, wait_until="networkidle", timeout=30000)
-            await page.wait_for_timeout(2000)  # SPA hydrate
+            try:
+                await page.goto(url, wait_until="networkidle", timeout=30000)
+                await page.wait_for_timeout(2000)  # SPA hydrate
 
-            windows: list[WindowQuota] = []
-            # Reset-time text is rendered in <span data-slot="reset-time">
-            # in the same order as the percentage cards (5h, weekly, monthly).
-            reset_texts = await page.locator('span[data-slot="reset-time"]').all_inner_texts()
+                windows: list[WindowQuota] = []
+                # Reset-time text is rendered in <span data-slot="reset-time">
+                # in the same order as the percentage cards (5h, weekly, monthly).
+                reset_texts = await page.locator('span[data-slot="reset-time"]').all_inner_texts()
 
-            for win_idx, (win_name, label) in enumerate(WINDOW_LABELS.items()):
-                pct = await _parse_card(page, label)
-                if pct is None:
-                    continue
-                # Parse reset-time text if available for this window
-                reset_secs = None
-                if win_idx < len(reset_texts):
-                    reset_secs = _parse_chinese_duration(reset_texts[win_idx])
-                windows.append(
-                    WindowQuota(
-                        window=win_name,
-                        used=pct,
-                        limit=100,
-                        reset_in_seconds=reset_secs,
+                for win_idx, (win_name, label) in enumerate(WINDOW_LABELS.items()):
+                    pct = await _parse_card(page, label)
+                    if pct is None:
+                        continue
+                    # Parse reset-time text if available for this window
+                    reset_secs = None
+                    if win_idx < len(reset_texts):
+                        reset_secs = _parse_chinese_duration(reset_texts[win_idx])
+                    windows.append(
+                        WindowQuota(
+                            window=win_name,
+                            used=pct,
+                            limit=100,
+                            reset_in_seconds=reset_secs,
+                        )
                     )
-                )
-
-            await ctx.close()
+            finally:
+                # Close the page explicitly so chromium helper PIDs are
+                # released immediately rather than waiting for ctx.close()
+                # in the outer async-with. Defense in depth — the outer
+                # ctx.close() still runs even if this raises.
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
             if not windows:
                 return ProviderResult(

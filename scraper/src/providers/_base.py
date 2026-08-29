@@ -13,7 +13,10 @@ Each non-comment line is TAB-delimited with 7 columns:
 Helpers:
   - read_cookie_file(path)         → dict[name,value]
   - cookies_for_playwright(d, host)→ list of Playwright cookie dicts
-  - browser_session()              → async Chromium session
+  - get_browser()                  → module-level singleton Browser
+  - browser_session()              → async context mgr yielding a fresh
+                                      BrowserContext (browser is reused)
+  - shutdown_browser()             → close the singleton (call on exit)
 """
 from __future__ import annotations
 
@@ -23,10 +26,18 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from loguru import logger
-from playwright.async_api import Browser, async_playwright
+from playwright.async_api import Browser, BrowserContext, async_playwright
 
 # Persistent profile so cookies survive container restarts
 PROFILE_DIR = Path("/tmp/llm-monitor-playwright")
+
+# Module-level singleton: one Chromium process per scraper run.
+# Rationale: launching a new browser per fetch leaks chromium helper
+# processes (~30 PIDs each); with 5-min ticks that fills the container's
+# PID namespace in days. Sharing one Browser across fetches is safe —
+# each fetch creates its own BrowserContext, which we close on exit.
+_pw = None
+_browser: Browser | None = None
 
 
 # ─── Cookie parsing (Netscape format only) ───────────────────────────
@@ -104,24 +115,62 @@ def read_cookie_file(path: Path | str) -> dict[str, str]:
     return cookie_dict_from_netscape(text)
 
 
-# ─── Playwright session ──────────────────────────────────────────────
-@asynccontextmanager
-async def browser_session(headless: bool = True) -> AsyncIterator[Browser]:
-    """Yields a Chromium browser with a persistent profile."""
+# ─── Playwright singleton lifecycle ──────────────────────────────────
+async def get_browser(headless: bool = True) -> Browser:
+    """Return the module-level Browser, launching it on first call.
+
+    Idempotent: safe to call from every fetch — only the first call
+    pays the launch cost; subsequent calls return the cached instance.
+    """
+    global _pw, _browser
+    if _browser is not None and _browser.is_connected():
+        return _browser
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(
-            headless=headless,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-            ],
-        )
+    _pw = await async_playwright().start()
+    _browser = await _pw.chromium.launch(
+        headless=headless,
+        args=[
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled",
+        ],
+    )
+    logger.info("playwright singleton browser launched")
+    return _browser
+
+
+async def shutdown_browser() -> None:
+    """Close the singleton browser + playwright driver (call on exit)."""
+    global _pw, _browser
+    if _browser is not None:
         try:
-            yield browser
-        finally:
-            await browser.close()
+            await _browser.close()
+        except Exception as e:
+            logger.warning(f"error closing browser: {e}")
+        _browser = None
+    if _pw is not None:
+        try:
+            await _pw.stop()
+        except Exception as e:
+            logger.warning(f"error stopping playwright driver: {e}")
+        _pw = None
+
+
+@asynccontextmanager
+async def browser_session(headless: bool = True) -> AsyncIterator[BrowserContext]:
+    """Yield a fresh BrowserContext on the singleton Browser.
+
+    The context (and any page the caller opens on it) is closed on exit,
+    so even an uncaught exception in the caller's `async with` block will
+    not leak Chromium helper processes. The Browser itself stays alive
+    for the lifetime of the scraper process.
+    """
+    browser = await get_browser(headless=headless)
+    ctx = await browser.new_context()
+    try:
+        yield ctx
+    finally:
+        await ctx.close()
 
 
 def now_utc() -> datetime:

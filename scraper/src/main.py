@@ -8,6 +8,7 @@ import asyncio
 import signal
 import traceback
 from datetime import datetime, timezone
+from typing import cast
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
@@ -17,6 +18,7 @@ from scraper.src.config import settings
 from scraper.src.metrics import push_metrics
 from scraper.src.models import ProviderResult
 from scraper.src.providers import kimi_code, minimaxi, opencode_go
+from scraper.src.providers._base import shutdown_browser
 from scraper.src.storage import get_store
 
 
@@ -40,6 +42,13 @@ PROVIDERS = [
     ("kimi_code",   kimi_code.is_configured,   kimi_code.fetch),
 ]
 
+# Hard ceiling on a single provider fetch. If a provider hangs (e.g. a
+# crashed Playwright context waiting forever on a network call), we cut it
+# off here so the rest of the tick — push, persist, other providers —
+# still completes. Without this, one hung provider locks APScheduler via
+# max_instances=1 and the dashboard silently freezes.
+PROVIDER_FETCH_TIMEOUT_SECONDS = 120
+
 
 # ─── Main scrape tick ──────────────────────────────────────────────
 async def tick(scheduler: AsyncIOScheduler) -> list[ProviderResult]:
@@ -55,7 +64,30 @@ async def tick(scheduler: AsyncIOScheduler) -> list[ProviderResult]:
             continue
         tasks.append(_run_one(name, fetch_fn))
 
-    results: list[ProviderResult] = await asyncio.gather(*tasks, return_exceptions=False)
+    # return_exceptions=True so one hung provider doesn't poison the whole
+    # tick. _run_one already catches its own exceptions; this is a belt-
+    # and-braces guarantee that a runaway wait_for() or Future leak
+    # can't take down the schedule.
+    raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Normalize any escaped exception into a failure result so push/store
+    # downstream never sees a raw exception object.
+    normalized: list[ProviderResult] = []
+    for r in raw_results:
+        if isinstance(r, BaseException):
+            logger.error(f"provider task escaped with exception: {r!r}")
+            normalized.append(
+                ProviderResult(
+                    provider="<unknown>",
+                    fetched_at=datetime.now(timezone.utc),
+                    windows=(),
+                    success=False,
+                    error=f"task escaped: {r!r}",
+                )
+            )
+        else:
+            normalized.append(r)
+    results = cast(list[ProviderResult], normalized)
 
     # ── Push to Prometheus ───────────────────────────────────────
     try:
@@ -94,12 +126,28 @@ async def tick(scheduler: AsyncIOScheduler) -> list[ProviderResult]:
 async def _run_one(name: str, fetch_fn) -> ProviderResult:
     alerter = get_alerter()
     try:
-        result = await fetch_fn()
+        # Hard ceiling: if a provider hangs (e.g. playwright waiting on
+        # a dead chromium process), cancel it and report failure rather
+        # than letting it block the whole tick.
+        result = await asyncio.wait_for(
+            fetch_fn(), timeout=PROVIDER_FETCH_TIMEOUT_SECONDS
+        )
         if result.success:
             alerter.record_success(name)
         else:
             await alerter.record_failure(name, result.error or "unknown error")
         return result
+    except asyncio.TimeoutError:
+        msg = f"timeout after {PROVIDER_FETCH_TIMEOUT_SECONDS}s"
+        logger.error(f"{name}: {msg}")
+        await alerter.record_failure(name, msg)
+        return ProviderResult(
+            provider=name,
+            fetched_at=datetime.now(timezone.utc),
+            windows=(),
+            success=False,
+            error=msg,
+        )
     except Exception as e:
         tb = traceback.format_exc(limit=3)
         logger.error(f"{name}: exception: {e}\n{tb}")
@@ -174,6 +222,12 @@ async def main() -> None:
         await stop_event.wait()
     finally:
         scheduler.shutdown(wait=False)
+        # Close the playwright singleton so docker stop doesn't have to
+        # wait for SIGKILL on orphaned chromium helpers.
+        try:
+            await shutdown_browser()
+        except Exception as e:
+            logger.warning(f"shutdown_browser error: {e}")
         logger.info("llm-monitor stopped")
 
 
