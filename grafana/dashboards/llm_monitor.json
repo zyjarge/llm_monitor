@@ -30,7 +30,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 47
+        "y": 57
       },
       "collapsed": false,
       "id": 100,
@@ -48,7 +48,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 48
+        "y": 58
       },
       "options": {
         "colorMode": "background",
@@ -121,7 +121,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 48
+        "y": 58
       },
       "options": {
         "colorMode": "background",
@@ -194,7 +194,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 48
+        "y": 58
       },
       "options": {
         "colorMode": "background",
@@ -267,7 +267,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 48
+        "y": 58
       },
       "options": {
         "colorMode": "value",
@@ -325,7 +325,7 @@
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 48
+        "y": 58
       },
       "options": {
         "colorMode": "value",
@@ -382,7 +382,7 @@
         "h": 4,
         "w": 4,
         "x": 20,
-        "y": 48
+        "y": 58
       },
       "options": {
         "colorMode": "value",
@@ -9139,7 +9139,7 @@
     },
     {
       "id": 208,
-      "title": "kimi_code — Monthly",
+      "title": "kimi_code — 月度余额 (monthly balance)",
       "type": "gauge",
       "datasource": {
         "type": "prometheus",
@@ -9196,7 +9196,122 @@
           "legendFormat": "kimi_code — Monthly",
           "refId": "A"
         }
-      ]
+      ],
+      "description": "Kimi 月度余额 —— 和 Kimi console 显示的是同一个数（subscriptionBalance.amountUsedRatio）。\n只来自 membership API，需要 Kimi 网页登录态。Code API 里根本没有\"月度余额\"这个数，所以拿不到 token 时这里是空值（-1），不会拿别的数来凑。\n注意：和下面的「加速包」是两回事 —— 那个是花了多少钱，这个是月度额度池。"
+    },
+    {
+      "id": 310,
+      "title": "kimi_code — 加速包 (booster spend)",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aejrdo9v8hz40c"
+      },
+      "maxDataPoints": 100,
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 38
+      },
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "textMode": "value_and_name"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 100,
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 95
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "llm_quota_percent{provider=\"kimi_code\",window=\"booster\"}",
+          "legendFormat": "kimi_code — 加速包",
+          "refId": "A"
+        }
+      ],
+      "description": "加速包（Extra Usage）本月已花金额 / 本月上限。\n这是\"钱花了多少\"（monthlyUsed / monthlyChargeLimit，单位：分），**不是**月度余额配额 —— 上面那个才是。\n月度余额来自 membership API（console），这个来自 Code API 的 booster_wallet。"
+    },
+    {
+      "id": 309,
+      "title": "kimi_code — 月度数据来源",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "aejrdo9v8hz40c"
+      },
+      "maxDataPoints": 100,
+      "gridPos": {
+        "h": 3,
+        "w": 8,
+        "x": 16,
+        "y": 45
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "name"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "llm_quota_source{provider=\"kimi_code\",window=\"monthly\"}",
+          "legendFormat": "{{source}}",
+          "refId": "A"
+        }
+      ],
+      "time": {
+        "from": "now-1h",
+        "to": "now"
+      },
+      "description": "月度余额的上游来源：membership = console 的月度余额；limit_month_total = Code API 的月度额度池；none = 上游没给月度余额（需要网页 token）。\n数值恒为 1，看的是 source 标签。"
     },
     {
       "id": 306,
@@ -13304,7 +13419,7 @@
     },
     {
       "type": "row",
-      "title": "📈 Quota % (5h / weekly / monthly)",
+      "title": "📈 Quota % (5h / weekly / monthly / booster)",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -13463,7 +13578,7 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 38
+        "y": 48
       },
       "options": {
         "legend": {

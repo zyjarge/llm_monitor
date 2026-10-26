@@ -59,6 +59,33 @@ async def test_success_resets_failure_counter():
     assert len(sent) == 1
 
 
+async def test_long_outage_re_alerts_periodically():
+    """A provider that stays broken must not go permanently silent."""
+    alerter = TelegramAlerter()
+    sent = []
+
+    async def fake_send(text):
+        sent.append(text)
+
+    alerter._send = fake_send
+
+    # 3 → the initial "cookie expired" alert
+    for _ in range(3):
+        await alerter.record_failure("opencode_go", "err")
+    assert len(sent) == 1
+    assert "连续失败" in sent[0]
+
+    # 4..99 → silent (no spam on every tick)
+    for _ in range(96):
+        await alerter.record_failure("opencode_go", "err")
+    assert len(sent) == 1
+
+    # 100 → a slow re-alert, so the outage isn't silent
+    await alerter.record_failure("opencode_go", "err")
+    assert len(sent) == 2
+    assert "100" in sent[1]
+
+
 async def test_quota_threshold_alerts():
     alerter = TelegramAlerter()
     sent = []

@@ -22,6 +22,21 @@ from scraper.src.providers._base import shutdown_browser
 from scraper.src.storage import get_store
 
 
+# ─── Provider kill switches ─────────────────────────────────────────
+# Read from config on every call so flipping the env var (and restarting)
+# takes effect without a code change.
+def _enabled_minimaxi() -> bool:
+    return settings.MINIMAXI_ENABLED
+
+
+def _enabled_opencode_go() -> bool:
+    return settings.OPENCODE_GO_ENABLED
+
+
+def _enabled_kimi_code() -> bool:
+    return settings.KIMI_CODE_ENABLED
+
+
 # ─── Logging setup ─────────────────────────────────────────────────
 logger.remove()
 logger.add(
@@ -36,10 +51,15 @@ logger.add(lambda msg: print(msg, end=""), level="INFO")
 # ─── Provider registry (drives main loop) ──────────────────────────
 # kimi_code re-enabled: uses Kimi Code Platform API
 # (api.kimi.com/coding/v1/usages, Bearer auth). See providers/kimi_code.py.
+#
+# Each entry is (name, is_enabled, is_configured, fetch). A provider with
+# its *_ENABLED flag off is skipped entirely — no HTTP call, no Playwright
+# browser launch, no Telegram failure alerts. Its metrics simply go stale
+# on the dashboard, which is the intent when you turn one off.
 PROVIDERS = [
-    ("minimaxi",    minimaxi.is_configured,    minimaxi.fetch),
-    ("opencode_go", opencode_go.is_configured, opencode_go.fetch),
-    ("kimi_code",   kimi_code.is_configured,   kimi_code.fetch),
+    ("minimaxi",    _enabled_minimaxi,    minimaxi.is_configured,    minimaxi.fetch),
+    ("opencode_go", _enabled_opencode_go, opencode_go.is_configured, opencode_go.fetch),
+    ("kimi_code",   _enabled_kimi_code,   kimi_code.is_configured,   kimi_code.fetch),
 ]
 
 # Hard ceiling on a single provider fetch. If a provider hangs (e.g. a
@@ -57,7 +77,11 @@ async def tick(scheduler: AsyncIOScheduler) -> list[ProviderResult]:
     logger.info("scrape tick starting")
 
     tasks = []
-    for name, configured, fetch_fn in PROVIDERS:
+    for name, enabled, configured, fetch_fn in PROVIDERS:
+        if not enabled():
+            logger.info(f"{name}: disabled via config, skipping")
+            tasks.append(_skip(name, "disabled via config"))
+            continue
         if not configured():
             logger.warning(f"{name}: not configured (missing env), skipping")
             tasks.append(_skip(name))
@@ -161,13 +185,13 @@ async def _run_one(name: str, fetch_fn) -> ProviderResult:
         )
 
 
-async def _skip(name: str) -> ProviderResult:
+async def _skip(name: str, reason: str = "not configured") -> ProviderResult:
     return ProviderResult(
         provider=name,
         fetched_at=datetime.now(timezone.utc),
         windows=(),
         success=False,
-        error="not configured",
+        error=reason,
     )
 
 

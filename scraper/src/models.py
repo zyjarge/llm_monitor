@@ -3,7 +3,7 @@ Shared data models for provider output.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 
@@ -30,6 +30,14 @@ class ProviderResult:
     windows: tuple[WindowQuota, ...]                 # 1..N windows
     success: bool = True
     error: str | None = None
+    # Which upstream each window came from, when a provider has more than
+    # one candidate source (kimi_code: membership API / Code API pools /
+    # booster wallet). Keyed by window name, because different windows can
+    # come from different upstreams — kimi_code's monthly balance and its
+    # booster spend are separate quantities from separate endpoints.
+    # Surfaced as a metric so the dashboard can explain a number that
+    # differs from the vendor console.
+    sources: dict[str, str] = field(default_factory=dict)
 
     def get(self, window: str) -> WindowQuota | None:
         for w in self.windows:
@@ -46,5 +54,8 @@ class ProviderResult:
 EXPECTED_WINDOWS: dict[str, tuple[str, ...]] = {
     "minimaxi":     ("5h", "weekly", "monthly"),
     "opencode_go":  ("5h", "weekly", "monthly"),
-    "kimi_code":    ("5h", "weekly", "monthly"),  # monthly derived from weekly (see kimi_code.py)
+    # "monthly" is the 月度余额 (monthly balance) and needs the membership
+    # API; "booster" is the 加速包 spend — a different quantity, reported
+    # separately so the two are never confused.
+    "kimi_code":    ("5h", "weekly", "monthly", "booster"),
 }

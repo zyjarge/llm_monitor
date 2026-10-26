@@ -260,7 +260,79 @@ groups:
                 params: []
               type: query
 
-      # ─── 5. AnyProvider5hWarning: any provider 5h >= 80% for 10m ───
+      # ─── 5. KimiMonthlyWarning: kimi 月度余额 >= 80% for 15m ───
+      - uid: kimi-monthly-warning
+        title: "kimi 月度余额 >= 80%"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: aejrdo9v8hz40c
+            relativeTimeRange:
+              from: 900
+              to: 0
+            model:
+              refId: A
+              datasource:
+                type: prometheus
+                uid: aejrdo9v8hz40c
+              expr: llm_quota_percent{provider="kimi_code",window="monthly"}
+              intervalMs: 60000
+              maxDataPoints: 1
+        noDataState: OK
+        execErrState: Alerting
+        for: 15m
+        annotations:
+          summary: "kimi_code monthly usage {{ $value | printf \"%.0f\" }}%"
+          description: "kimi_code monthly usage >= 80% for 15+ min. This is the real monthly pool — plan around it."
+        labels:
+          severity: warning
+          provider: kimi_code
+          window: monthly
+        isPaused: false
+      - refId: C
+        datasourceUid: __expr__
+        model:
+          refId: C
+          type: threshold
+          expression: A
+          conditions:
+            - evaluator:
+                type: gt
+                params: [80]
+              operator:
+                type: and
+              query:
+                params: [A]
+              reducer:
+                type: last
+                params: []
+              type: query
+
+      # ─── 6. AnyProvider5hWarning: any provider 5h >= 80% for 10m ───
+      # ─── 5b. KimiBoosterSpendWarning: 加速包 spend >= 80% of cap ───
+      # A different quantity from the 月度余额 above: money spent on the
+      # booster pack against its monthly charge cap.
+      - uid: kimi-booster-spend-warning
+        title: "kimi 加速包 spend >= 80% of monthly cap"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: aejrdo9v8hz40c
+            relativeTimeRange:
+              from: 900
+              to: 0
+            model:
+              refId: A
+              datasource:
+                type: prometheus
+                uid: aejrdo9v8hz40c
+              expr: llm_quota_percent{provider="kimi_code",window="booster"}
+              intervalMs: 60000
+              maxDataPoints: 1
+        noDataState: OK
+        execErrState: Alerting
+        for: 15m
+
       - uid: any-5h-80
         title: "any provider 5h usage >= 80%"
         condition: C
