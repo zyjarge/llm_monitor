@@ -10,13 +10,21 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=Path(__file__).resolve().parents[3] / ".env",
+        env_file=Path(__file__).resolve().parents[2] / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
     )
 
     # ─── Providers ───────────────────────────────────────────────
+    # Per-provider kill switch. Set to false to stop polling a provider
+    # entirely: no fetch, no browser launch, no alert noise. Use this
+    # when a provider's upstream breaks (e.g. opencode_go's dashboard
+    # selectors went stale) or you temporarily don't care about it.
+    MINIMAXI_ENABLED: bool = True
+    OPENCODE_GO_ENABLED: bool = True
+    KIMI_CODE_ENABLED: bool = True
+
     MINIMAX_API_KEY: str = ""
     MINIMAX_API_URL: str = "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains"
 
@@ -25,6 +33,28 @@ class Settings(BaseSettings):
 
     KIMI_API_URL: str = "https://api.kimi.com/coding/v1/usages"
     KIMI_API_KEY: str = ""
+    # Web session cookie (Netscape format) — supplies the `kimi-auth` JWT
+    # used by the membership API, which reports the same monthly pool
+    # percentage the Kimi console shows. Optional: without it the monthly
+    # window falls back to the Code API's booster_wallet data.
+    KIMI_COOKIE_FILE: str = "cookie/kimi_cookie"
+    # The Kimi web JWT. Modern Kimi web stores it in localStorage under
+    # `access_token` rather than in a `kimi-auth` cookie, so a Cookie-Editor
+    # export no longer contains it. Either paste it here, or drop it in
+    # KIMI_TOKEN_FILE as plain text (one line, no quotes).
+    KIMI_AUTH_TOKEN: str = ""
+    KIMI_TOKEN_FILE: str = "cookie/kimi_token"
+    # The access token lives ~15 minutes; the refresh token from the same
+    # login response is long-lived and is exchanged automatically.
+    KIMI_REFRESH_TOKEN_FILE: str = "cookie/kimi_refresh_token"
+    # Kimi membership gateway (Connect RPC). Rejects Code API keys — needs
+    # the `kimi-auth` web session token.
+    # The auth service that issues/refreshes web tokens.
+    KIMI_AUTH_BASE_URL: str = "https://auth.kimi.com/api"
+    KIMI_MEMBERSHIP_URL: str = (
+        "https://www.kimi.com/apiv2/kimi.gateway.membership.v2."
+        "MembershipService/GetSubscriptionStats"
+    )
 
     # ─── Notifications ───────────────────────────────────────────
     TELEGRAM_BOT_TOKEN: str = ""

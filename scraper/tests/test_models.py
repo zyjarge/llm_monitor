@@ -51,6 +51,20 @@ def test_provider_result_windows_dict():
 
 
 def test_expected_windows_contract():
-    """All providers should declare (5h, weekly, monthly)."""
+    """All providers must declare (5h, weekly, monthly).
+
+    A provider may declare extra windows beyond that core set — kimi_code
+    adds "booster" for the 加速包 spend, which is a separate quantity from
+    the monthly balance.
+    """
     for provider, windows in EXPECTED_WINDOWS.items():
-        assert set(windows) == {"5h", "weekly", "monthly"}, f"{provider} missing windows"
+        missing = {"5h", "weekly", "monthly"} - set(windows)
+        assert not missing, f"{provider} missing windows: {missing}"
+
+
+def test_kimi_code_declares_booster_separately_from_monthly():
+    """The 加速包 spend must be its own window, never the monthly one."""
+    windows = EXPECTED_WINDOWS["kimi_code"]
+    assert "booster" in windows
+    assert "monthly" in windows
+    assert "booster" != "monthly"

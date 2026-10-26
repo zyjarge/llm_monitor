@@ -56,6 +56,16 @@ def build_metrics(results: Iterable[ProviderResult]) -> CollectorRegistry:
         ["provider"],
         registry=registry,
     )
+    # Which upstream a provider's numbers came from. 1 = the active source.
+    # Labelled per window: a provider can source different windows from
+    # different upstreams (kimi_code: monthly balance from the membership
+    # API, booster spend from the Code API).
+    g_source = Gauge(
+        "llm_quota_source",
+        "Active upstream source for a provider's quota window (1 = active).",
+        ["provider", "window", "source"],
+        registry=registry,
+    )
 
     now = datetime.now(timezone.utc)
 
@@ -80,6 +90,11 @@ def build_metrics(results: Iterable[ProviderResult]) -> CollectorRegistry:
             actual = set(result.windows_dict.keys())
             for missing in set(expected) - actual:
                 g_pct.labels(provider=result.provider, window=missing).set(-1)
+
+            for window, source in result.sources.items():
+                g_source.labels(
+                    provider=result.provider, window=window, source=source
+                ).set(1)
         else:
             g_status.labels(provider=result.provider).set(0)
             g_scrape_age.labels(provider=result.provider).set(0)

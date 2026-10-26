@@ -32,6 +32,12 @@ class TelegramAlerter:
         count = self._fail_count[provider]
         logger.warning(f"{provider}: failure #{count}: {error}")
 
+        # Fire the "cookie expired" alert the first time the counter reaches
+        # the tolerance. `==` is deliberate here, not `>=`: without a
+        # re-alert path, `>=` would spam Telegram every single tick. The
+        # `elif` below re-alerts on a slow cadence instead, so a provider
+        # that stays broken for weeks (opencode_go failed 16k+ times) is
+        # not permanently silent.
         if count == settings.COOKIE_FAILURE_TOLERANCE:
             await self._send(
                 f"🚨 <b>{provider}</b> cookie/认证已失效（连续失败 {count} 次）\n\n"
@@ -42,6 +48,15 @@ class TelegramAlerter:
                 f"3. 更新 <code>~/workspace/llm_monitor/.env</code>\n"
                 f"4. <code>docker compose restart scraper</code>"
             )
+        elif count > settings.COOKIE_FAILURE_TOLERANCE:
+            # Re-alert on a slow cadence so a long outage isn't silent.
+            if count % 100 == 0:
+                await self._send(
+                    f"⚠️ <b>{provider}</b> 仍然连续失败 <b>{count}</b> 次\n\n"
+                    f"<b>最近错误</b>: <code>{_escape(error)[:300]}</code>\n\n"
+                    f"如果已经不需要这个 provider，可以在 <code>.env</code> 里设置 "
+                    f"<code>{provider.upper()}_ENABLED=false</code> 停掉它。"
+                )
 
     async def check_quota_thresholds(self, results) -> None:
         for r in results:

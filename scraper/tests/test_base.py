@@ -1,52 +1,40 @@
 """
-Tests for cookie header parsing utilities.
-"""
-import pytest
+Tests for the shared cookie helpers.
 
+The cookie format on disk is Netscape (exported by Chrome extensions like
+Cookie-Editor), so the parser under test is `cookie_dict_from_netscape`.
+"""
 from scraper.src.providers._base import (
-    cookie_dict_from_header,
+    cookie_dict_from_netscape,
     cookies_for_playwright,
     read_cookie_file,
 )
 
 
-def test_parse_simple_header():
-    h = "auth=abc123; session=xyz789; theme=light"
-    d = cookie_dict_from_header(h)
-    assert d == {"auth": "abc123", "session": "xyz789", "theme": "light"}
-
-
-def test_parse_handles_spaces_around_pairs():
-    h = " auth=abc ;  session=xyz "
-    d = cookie_dict_from_header(h)
-    assert d == {"auth": "abc", "session": "xyz"}
-
-
-def test_parse_empty_string_returns_empty_dict():
-    assert cookie_dict_from_header("") == {}
-    assert cookie_dict_from_header("   ") == {}
-
-
-def test_parse_quoted_values():
-    h = 'name="quoted value"; other=plain'
-    d = cookie_dict_from_header(h)
-    assert d == {"name": "quoted value", "other": "plain"}
-
-
-def test_parse_skips_pairs_without_equals():
-    h = "garbage; auth=real; nochance"
-    d = cookie_dict_from_header(h)
-    assert d == {"auth": "real"}
-
-
-def test_parse_real_kimi_cookie_shape():
-    # Sample from user's actual file (truncated values, but real field names)
-    h = (
-        "lang=zh-CN;Hm_lpvt_358cae4815e85d48f7e8ab7f3680a74b=1784820337;"
-        "_ga_Z0ZTEN03PZ=GSxxx;kimi-auth=Fe26.2**real_token**;"
-        "_clck=1*abc;HMACCOUNT=189BDD207CA0272B;theme=light"
+def test_parse_netscape_lines():
+    text = (
+        "opencode.ai\tFALSE\t/\tFALSE\t0\tauth\tFe26.2**token**\n"
+        "opencode.ai\tFALSE\t/\tFALSE\t0\toc_locale\tzh\n"
     )
-    d = cookie_dict_from_header(h)
+    d = cookie_dict_from_netscape(text)
+    assert d == {"auth": "Fe26.2**token**", "oc_locale": "zh"}
+
+
+def test_httponly_prefix_is_stripped_not_treated_as_comment():
+    text = "#HttpOnly_opencode.ai\tFALSE\t/\tTRUE\t1800000000\tkimi-auth\tFe26.2**t**\n"
+    d = cookie_dict_from_netscape(text)
+    assert d == {"kimi-auth": "Fe26.2**t**"}
+
+
+def test_real_kimi_cookie_shape():
+    # Field names from the user's actual cookie file.
+    text = (
+        "www.kimi.com\tFALSE\t/\tFALSE\t0\tlang\tzh-CN\n"
+        ".kimi.com\tFALSE\t/\tFALSE\t0\tHMACCOUNT\t189BDD207CA0272B\n"
+        "#HttpOnly_www.kimi.com\tFALSE\t/\tTRUE\t0\tkimi-auth\tFe26.2**real_token**\n"
+        "www.kimi.com\tFALSE\t/\tFALSE\t0\ttheme\tlight\n"
+    )
+    d = cookie_dict_from_netscape(text)
     assert "kimi-auth" in d
     assert d["kimi-auth"].startswith("Fe26.2")
     assert d["lang"] == "zh-CN"
@@ -55,17 +43,33 @@ def test_parse_real_kimi_cookie_shape():
     assert d["HMACCOUNT"] == "189BDD207CA0272B"
 
 
-def test_parse_real_opencode_cookie_shape():
-    h = "auth=Fe26.2**truncated**; oc_locale=zh"
-    d = cookie_dict_from_header(h)
-    assert d["auth"].startswith("Fe26.2")
-    assert d["oc_locale"] == "zh"
+def test_comments_and_blank_lines_are_skipped():
+    text = (
+        "# Netscape HTTP Cookie File\n"
+        "# http://curl.haxx.se/rfc/cookie_spec.html\n"
+        "\n"
+        "opencode.ai\tFALSE\t/\tFALSE\t0\tauth\tvalue\n"
+    )
+    d = cookie_dict_from_netscape(text)
+    assert d == {"auth": "value"}
+
+
+def test_malformed_lines_are_skipped():
+    text = "garbage\nonly\ttwo\tcolumns\n"
+    assert cookie_dict_from_netscape(text) == {}
+
+
+def test_empty_input_returns_empty_dict():
+    assert cookie_dict_from_netscape("") == {}
+    assert cookie_dict_from_netscape("   ") == {}
 
 
 def test_last_wins_on_duplicates():
-    h = "auth=first; auth=second"
-    d = cookie_dict_from_header(h)
-    assert d["auth"] == "second"
+    text = (
+        "opencode.ai\tFALSE\t/\tFALSE\t0\tauth\tfirst\n"
+        "opencode.ai\tFALSE\t/\tFALSE\t0\tauth\tsecond\n"
+    )
+    assert cookie_dict_from_netscape(text)["auth"] == "second"
 
 
 def test_cookies_for_playwright_attaches_domain():
@@ -86,5 +90,9 @@ def test_read_cookie_file_missing_returns_empty(tmp_path):
 
 def test_read_cookie_file_reads_and_parses(tmp_path):
     p = tmp_path / "c.txt"
-    p.write_text("auth=abc; lang=en", encoding="utf-8")
+    p.write_text(
+        "opencode.ai\tFALSE\t/\tFALSE\t0\tauth\tabc\n"
+        "opencode.ai\tFALSE\t/\tFALSE\t0\tlang\ten\n",
+        encoding="utf-8",
+    )
     assert read_cookie_file(p) == {"auth": "abc", "lang": "en"}

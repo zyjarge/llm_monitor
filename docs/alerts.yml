@@ -59,7 +59,36 @@ groups:
           summary: "kimi_code weekly usage at {{ $value | printf \"%.0f\" }}%"
           description: "kimi_code weekly usage has been at or above 80% for 15+ minutes."
 
-      # ─── 5. Any provider 5h >= 80% (warning, all-providers catch-all) ───
+      # ─── 5. kimi 月度余额 >= 80% (warning) ───
+      # The monthly BALANCE (月度余额) — the same number the Kimi console
+      # shows. Requires a Kimi web token; without one the window is -1 and
+      # this alert stays quiet rather than firing on a sentinel.
+      - alert: KimiMonthlyWarning
+        expr: llm_quota_percent{provider="kimi_code",window="monthly"} >= 80
+        for: 15m
+        labels:
+          severity: warning
+          provider: kimi_code
+          window: monthly
+        annotations:
+          summary: "kimi_code 月度余额 at {{ $value | printf \"%.0f\" }}%"
+          description: "kimi_code 月度余额 has been at or above 80% for 15+ minutes. This is the console's own monthly figure — plan around it."
+
+      # ─── 5b. kimi 加速包 spend >= 80% of the monthly cap ───
+      # A different quantity: money burned on the 加速包 against its monthly
+      # charge cap, NOT the 月度余额 quota.
+      - alert: KimiBoosterSpendWarning
+        expr: llm_quota_percent{provider="kimi_code",window="booster"} >= 80
+        for: 15m
+        labels:
+          severity: warning
+          provider: kimi_code
+          window: booster
+        annotations:
+          summary: "kimi_code 加速包 spend at {{ $value | printf \"%.0f\" }}%"
+          description: "kimi_code 加速包 (booster) spend has been at or above 80% of the monthly cap for 15+ minutes. This is money spent on extra usage, not the 月度余额 quota."
+
+      # ─── 6. Any provider 5h >= 80% (warning, all-providers catch-all) ───
       - alert: AnyProvider5hWarning
         expr: llm_quota_percent{window="5h"} >= 80
         for: 10m
